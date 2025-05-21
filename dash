@@ -2,100 +2,128 @@ local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
-local webhookForwardURL = "http://192.168.100.2:4241/send"
-local buyQueueURL = "http://192.168.100.2:4241/buy_queue.json"
+-- 🔓 Rename obfuscated Remotes using dehashed RouterClient table
+local function rename(remotename, hashedremote)
+    hashedremote.Name = remotename
+end
+
+local AC_MODULE = ReplicatedStorage.ClientModules.Core.RouterClient.RouterClient
+local initFunction = require(AC_MODULE).init
+local upvalueTable = getupvalue(initFunction, 7)
+
+if type(upvalueTable) == "table" then
+    table.foreach(upvalueTable, rename)
+    print("✅ Remotes successfully renamed.")
+else
+    warn("❌ Failed to patch remotes.")
+end
+
+-- 🌐 Hostinger PHP endpoints
+local baseDomain = "https://thedupper.com"
 local apiKey = "Pilot"
 
--- Wait for Adopt Me client data to load
+local webhookForwardURL = baseDomain .. "/send.php?key=" .. apiKey
+local buyQueueURL = baseDomain .. "/buy_queue.json"
+local clearUrlBase = baseDomain .. "/clear_order.php?id="
+
+-- ⏳ Wait until player stats are ready
 local function wait_for_data()
-	local clientData = require(ReplicatedStorage:WaitForChild("ClientModules").Core.ClientData)
-	print("⏳ Waiting for client data...")
+    local clientData = require(ReplicatedStorage:WaitForChild("ClientModules").Core.ClientData)
+    print("⏳ Waiting for client data...")
 
-	repeat task.wait(1)
-	until clientData.get_data() and clientData.get_data()[Players.LocalPlayer.Name] 
-	       and clientData.get("money") ~= nil
+    repeat task.wait(1)
+    until clientData.get_data() and clientData.get_data()[Players.LocalPlayer.Name] and clientData.get("money") ~= nil
 
-	print("✅ Client data is ready!")
-	return clientData
+    print("✅ Client data is ready!")
+    return clientData
 end
 
--- Collect stats
+-- 📊 Collect money and potions
 local function collect_stats(clientData)
-	local playerData = clientData.get_data()[Players.LocalPlayer.Name]
-	local bucks = tonumber(clientData.get("money")) or 0
-	local potions = 0
+    local playerData = clientData.get_data()[Players.LocalPlayer.Name]
+    local bucks = tonumber(clientData.get("money")) or 0
+    local potions = 0
 
-	for _, item in pairs(playerData.inventory.food or {}) do
-		if item.kind == "pet_age_potion" then
-			potions += 1
-		end
-	end
+    for _, item in pairs(playerData.inventory.food or {}) do
+        if item.kind == "pet_age_potion" then
+            potions += 1
+        end
+    end
 
-	return potions, bucks
+    return potions, bucks
 end
 
--- 🛒 Buy egg(s) if there's a matching queue entry
+-- 🛒 Check buy_queue.json and process orders
 local function check_buy_queue()
-	local success, response = pcall(function()
-		return HttpService:GetAsync(buyQueueURL)
-	end)
+    local success, response = pcall(function()
+        return game:HttpGet(buyQueueURL)
+    end)
 
-	if success and response then
-		local orders = HttpService:JSONDecode(response)
-		local player = Players.LocalPlayer.Name
+    if success and response then
+        local data = HttpService:JSONDecode(response)
+        local player = Players.LocalPlayer.Name
 
-		for _, order in ipairs(orders) do
-			if order.player == player and order.key == apiKey then
-				local amount = tonumber(order.amount) or 1
-				local eggName = tostring(order.egg)
+        for _, order in ipairs(data) do
+            if order.player == player and order.key == apiKey then
+                local amount = tonumber(order.amount) or 1
+                local itemId = tostring(order.egg)
 
-				local Remote = ReplicatedStorage:FindFirstChild("BuyItem")
-				if Remote then
-					for i = 1, amount do
-						pcall(function()
-							Remote:InvokeServer(eggName)
-							print("🐣 Bought egg:", eggName)
-						end)
-						task.wait(0.5)
-					end
-				end
-			end
-		end
-	end
+                local shopRemote = ReplicatedStorage:FindFirstChild("API")
+                    and ReplicatedStorage.API:FindFirstChild("ShopAPI/BuyItem")
+
+                if shopRemote then
+                    local args = {
+                        "pets",
+                        itemId,
+                        { buy_count = amount }
+                    }
+
+                    local successBuy, result = pcall(function()
+                        return shopRemote:InvokeServer(unpack(args))
+                    end)
+
+                    if successBuy then
+                        print("🐣 Bought:", itemId, "x" .. amount)
+                    else
+                        warn("❌ Failed to buy:", itemId, "-", result)
+                    end
+                else
+                    warn("❌ Remote 'ShopAPI/BuyItem' not found.")
+                end
+
+                -- ✅ Clear order from Hostinger
+                local clearUrl = clearUrlBase .. tostring(order.timestamp)
+                pcall(function()
+                    game:HttpGet(clearUrl)
+                end)
+            end
+        end
+    else
+        warn("⚠️ Failed to fetch buy_queue.json:", response)
+    end
 end
 
--- ✅ Start
-print("📡 Adopt Me Stats Uploader + Auto Buyer Started")
+-- 🚀 Start loop
+print("📡 Adopt Me Stats Uploader + Auto Buyer + Remote Renamer Started")
 local clientData = wait_for_data()
 
--- Loop: send stats + check buy requests every 2 minutes
 while true do
-	local player = Players.LocalPlayer.Name
-	local potions, bucks = collect_stats(clientData)
+    local player = Players.LocalPlayer.Name
+    local potions, bucks = collect_stats(clientData)
 
-	local url = string.format(
-		"%s?key=%s&player=%s&potions=%d&bucks=%d&online=true",
-		webhookForwardURL,
-		HttpService:UrlEncode(apiKey),
-		HttpService:UrlEncode(player),
-		potions,
-		bucks
-	)
+    local url = string.format(
+        "%s&player=%s&potions=%d&bucks=%d&online=true",
+        webhookForwardURL,
+        HttpService:UrlEncode(player),
+        potions,
+        bucks
+    )
 
-	print("🌐 Sending stats:", url)
+    print("🌐 Sending stats:", url)
+    pcall(function()
+        game:HttpGet(url)
+    end)
 
-	local success, response = pcall(function()
-		return game:HttpGet(url)
-	end)
-
-	if success then
-		print("✅ Stats sent successfully!")
-	else
-		warn("❌ Failed to send stats:", response)
-	end
-
-	-- 🛒 Check for buy orders
-	check_buy_queue()
-
-	task.wait(120)
+    check_buy_queue()
+    task.wait(120)
 end
