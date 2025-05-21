@@ -3,6 +3,8 @@ local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
 local webhookForwardURL = "http://192.168.100.2:4241/send"
+local buyQueueURL = "http://192.168.100.2:4241/buy_queue.json"
+local apiKey = "Pilot"
 
 -- Wait for Adopt Me client data to load
 local function wait_for_data()
@@ -17,7 +19,7 @@ local function wait_for_data()
 	return clientData
 end
 
--- Collect bucks and pet_age_potion
+-- Collect stats
 local function collect_stats(clientData)
 	local playerData = clientData.get_data()[Players.LocalPlayer.Name]
 	local bucks = tonumber(clientData.get("money")) or 0
@@ -32,18 +34,49 @@ local function collect_stats(clientData)
 	return potions, bucks
 end
 
-print("📡 Adopt Me Stats Uploader Started")
+-- 🛒 Buy egg(s) if there's a matching queue entry
+local function check_buy_queue()
+	local success, response = pcall(function()
+		return HttpService:GetAsync(buyQueueURL)
+	end)
 
+	if success and response then
+		local orders = HttpService:JSONDecode(response)
+		local player = Players.LocalPlayer.Name
+
+		for _, order in ipairs(orders) do
+			if order.player == player and order.key == apiKey then
+				local amount = tonumber(order.amount) or 1
+				local eggName = tostring(order.egg)
+
+				local Remote = ReplicatedStorage:FindFirstChild("BuyItem")
+				if Remote then
+					for i = 1, amount do
+						pcall(function()
+							Remote:InvokeServer(eggName)
+							print("🐣 Bought egg:", eggName)
+						end)
+						task.wait(0.5)
+					end
+				end
+			end
+		end
+	end
+end
+
+-- ✅ Start
+print("📡 Adopt Me Stats Uploader + Auto Buyer Started")
 local clientData = wait_for_data()
 
+-- Loop: send stats + check buy requests every 2 minutes
 while true do
 	local player = Players.LocalPlayer.Name
 	local potions, bucks = collect_stats(clientData)
 
-	-- ✅ Added online=true
 	local url = string.format(
-		"%s?player=%s&potions=%d&bucks=%d&online=true",
+		"%s?key=%s&player=%s&potions=%d&bucks=%d&online=true",
 		webhookForwardURL,
+		HttpService:UrlEncode(apiKey),
 		HttpService:UrlEncode(player),
 		potions,
 		bucks
@@ -61,5 +94,8 @@ while true do
 		warn("❌ Failed to send stats:", response)
 	end
 
-	task.wait(120) -- ⏱ Update every hour
+	-- 🛒 Check for buy orders
+	check_buy_queue()
+
+	task.wait(120)
 end
