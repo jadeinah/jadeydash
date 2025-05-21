@@ -1,32 +1,40 @@
+-- 🌐 Services
 local HttpService = game:GetService("HttpService")
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
 
--- 🔓 Rename obfuscated Remotes using dehashed RouterClient table
+-- 📦 Remotes renaming
 local function rename(remotename, hashedremote)
     hashedremote.Name = remotename
 end
 
-local AC_MODULE = ReplicatedStorage.ClientModules.Core.RouterClient.RouterClient
-local initFunction = require(AC_MODULE).init
-local upvalueTable = getupvalue(initFunction, 7)
+-- 🔓 Rename obfuscated remotes using RouterClient (ModuleScript only)
+local success, AC_MODULE = pcall(function()
+    return require(ReplicatedStorage:WaitForChild("ClientModules").Core.RouterClient.RouterClient)
+end)
 
-if type(upvalueTable) == "table" then
-    table.foreach(upvalueTable, rename)
-    print("✅ Remotes successfully renamed.")
+if success then
+    local initFunction = AC_MODULE.init
+    local upvalueTable = getupvalue(initFunction, 7)
+
+    if type(upvalueTable) == "table" then
+        table.foreach(upvalueTable, rename)
+        print("✅ Remotes successfully renamed.")
+    else
+        warn("❌ Failed to patch remotes.")
+    end
 else
-    warn("❌ Failed to patch remotes.")
+    warn("❌ Failed to require RouterClient:", AC_MODULE)
 end
 
--- 🌐 Hostinger PHP endpoints
+-- 🌐 Hostinger endpoints
 local baseDomain = "https://thedupper.com"
 local apiKey = "Pilot"
-
 local webhookForwardURL = baseDomain .. "/send.php?key=" .. apiKey
 local buyQueueURL = baseDomain .. "/buy_queue.json"
 local clearUrlBase = baseDomain .. "/clear_order.php?id="
 
--- ⏳ Wait until player stats are ready
+-- ⏳ Wait for data
 local function wait_for_data()
     local clientData = require(ReplicatedStorage:WaitForChild("ClientModules").Core.ClientData)
     print("⏳ Waiting for client data...")
@@ -38,7 +46,7 @@ local function wait_for_data()
     return clientData
 end
 
--- 📊 Collect money and potions
+-- 📊 Collect stats
 local function collect_stats(clientData)
     local playerData = clientData.get_data()[Players.LocalPlayer.Name]
     local bucks = tonumber(clientData.get("money")) or 0
@@ -53,7 +61,7 @@ local function collect_stats(clientData)
     return potions, bucks
 end
 
--- 🛒 Check buy_queue.json and process orders
+-- 🛒 Process orders
 local function check_buy_queue()
     local success, response = pcall(function()
         return game:HttpGet(buyQueueURL)
@@ -68,15 +76,9 @@ local function check_buy_queue()
                 local amount = tonumber(order.amount) or 1
                 local itemId = tostring(order.egg)
 
-                local shopRemote = ReplicatedStorage:FindFirstChild("API")
-                    and ReplicatedStorage.API:FindFirstChild("ShopAPI/BuyItem")
-
+                local shopRemote = ReplicatedStorage:FindFirstChild("API") and ReplicatedStorage.API:FindFirstChild("ShopAPI/BuyItem")
                 if shopRemote then
-                    local args = {
-                        "pets",
-                        itemId,
-                        { buy_count = amount }
-                    }
+                    local args = { "pets", itemId, { buy_count = amount } }
 
                     local successBuy, result = pcall(function()
                         return shopRemote:InvokeServer(unpack(args))
@@ -91,7 +93,7 @@ local function check_buy_queue()
                     warn("❌ Remote 'ShopAPI/BuyItem' not found.")
                 end
 
-                -- ✅ Clear order from Hostinger
+                -- ✅ Clear from queue
                 local clearUrl = clearUrlBase .. tostring(order.timestamp)
                 pcall(function()
                     game:HttpGet(clearUrl)
@@ -103,8 +105,8 @@ local function check_buy_queue()
     end
 end
 
--- 🚀 Start loop
-print("📡 Adopt Me Stats Uploader + Auto Buyer + Remote Renamer Started")
+-- 🚀 Main loop
+print("📡 Adopt Me Dashboard + Buyer Started")
 local clientData = wait_for_data()
 
 while true do
